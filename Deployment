@@ -1,0 +1,6 @@
+#!/bin/bash
+# 创建虚拟环境并安装依赖
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+echo "✅ 虚拟环境创建完成，激活命令：source venv/bin/activate"
