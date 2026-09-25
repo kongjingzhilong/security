@@ -38,8 +38,9 @@ Kubernetes 容器环境中，攻击面持续扩大，现有安全组件存在明
 3. **容器读取 /etc/shadow 敏感文件** → 高危 → 驱逐 Pod
 4. **链式组合攻击**（端口扫描 → 交互式 Shell → 窃取 SA Token）→ 时间窗口聚合识别为高危链式攻击，升级处置
 ## 环境依赖（版本锁定，禁止 latest）
-> 推荐：WSL2 Ubuntu / 虚拟机 Ubuntu，内核 ≥ 5.8
-Kind 0.20.0 · Kubernetes 1.28.x · Falco 0.37.x (modern-bpf) · OPA Gatekeeper 3.14.x · Python 3.11 · python-kubernetes（与 K8s 版本匹配）· PostgreSQL 15 · Redis 7 · FastAPI
+推荐：Rocky Linux 9（物理机/虚拟机），内核 ≥5.14
+Kind 0.20.0 · Kubernetes 1.28.x · Falco 0.37.x (modern-bpf) · OPA Gatekeeper 3.14.x
+· Python 3.11 · python-kubernetes（与K8s版本匹配）· PostgreSQL 15 · Redis 7 · FastAPI
 ## 快速部署
 ```bash
 # 1. 克隆仓库
