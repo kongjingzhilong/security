@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+# 模拟多步攻击链，触发 Falco 检测 → OPA 动态拦截
+set -e
+echo "=== 🔴 多步攻击链 POC 演示 ==="
+# 阶段1：模拟异常 shell 启动
+echo "[Stage 1] 模拟异常 shell 启动..."
+kubectl run stage1-shell --image=alpine:latest --restart=Never -- sh -c "while true; do echo 'shell spawned'; sleep 1; done"
+sleep 3
+# 阶段2：模拟敏感文件读取
+echo "[Stage 2] 模拟敏感文件读取..."
+kubectl run stage2-read --image=alpine:latest --restart=Never -- sh -c "cat /etc/shadow 2>/dev/null; cat /root/.ssh/id_rsa 2>/dev/null; sleep 2"
+sleep 3
+# 阶段3：模拟提权尝试
+echo "[Stage 3] 模拟特权容器创建（提权）..."
+cat << 'EOF' | kubectl apply -f -
+apiVersion: v1
+kind: Pod
+metadata:
+  name: stage3-privileged
+spec:
+  containers:
+    - name: priv
+      image: alpine:latest
+      securityContext:
+        privileged: true
+      command: ["sh", "-c", "echo 'privileged container'; sleep 10"]
+EOF
+sleep 3
+# 阶段4：模拟 hostPath 挂载（容器逃逸）
+echo "[Stage 4] 模拟 hostPath 挂载（容器逃逸尝试）..."
+cat << 'EOF' | kubectl apply -f -
+apiVersion: v1
+kind: Pod
+metadata:
+  name: stage4-hostpath
+spec:
+  containers:
+    - name: host
+      image: alpine:latest
+      volumeMounts:
+        - mountPath: /host
+          name: host-root
+  volumes:
+    - name: host-root
+      hostPath:
+        path: /
+EOF
+sleep 5
+echo ""
+echo "=== ✅ POC 执行完成 ==="
+echo "查看 Falco 告警: kubectl logs -n falco-system -l app.kubernetes.io/name=falco | grep -i attack"
+echo "查看 OPA 拦截: kubectl get k8simagepolicy -o wide"
+echo "查看数据库记录: mysql -h 127.0.0.1 -u root -proot123 falco_alerts -e 'SELECT id,rule_name,priority,attack_stage FROM alerts;'"
