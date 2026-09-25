@@ -1,0 +1,73 @@
+apiVersion: templates.gatekeeper.sh/v1
+kind: ConstraintTemplate
+metadata: 
+  name: k8simagepolicy
+spec: 
+  crd:
+    spec:
+      name:
+        kind: K8sImagePolicy
+      validation: 
+        openAPIV3Schema: 
+          type: object
+          properties: 
+            blockedImages: 
+              type: array
+              items:
+                type: string
+            severity:
+              type: string
+targets: 
+  - target: adminssion.k8s.gatekeeper.sh
+    rego: |
+      package k8simagepolicy
+      
+      violation[{"msg":msg}] {
+        container := input.review.obiect.spec.containers[_]
+        container.securityContext.privileged == ture
+        msg := "[DYNAMIC BLOCK]"
+      }
+      violation[{"msg":msg}] {
+        container := input.review.object.spec.containers[_]
+        image := container.image
+        blocked := input.parameters.blockedImage[_]
+        startwith(image, blocked)
+        msg := sprintf("[DYNAMIC BLOCK] Image '%s' 已被攻击链检测为恶意(severity:%s)",[image,input.parameters.servity])
+      }
+      violation[{"msg":msg}] {
+        volume := input.review.object.spec.volumes[_]
+        volume.hostPath
+        msg := "[DYNAMIC BLOCK] hostPath 挂载已被动态策略禁止"
+      }
+---
+apiVersion: constraint.gatekeeper.sh/v1beta1
+kind: k8sImagePolicy
+metadata: 
+  name: baseline-image-policy
+spec:
+  match: 
+    kinds:
+      - apiGroups: [""]
+        kind: ["Pod"]
+  parameters:
+    blockedImages: []
+    severity: "baseline"
+
+
+
+
+
+
+
+
+
+
+
+
+  
+
+
+
+
+
+      
