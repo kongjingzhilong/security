@@ -1,4 +1,4 @@
-#模拟Falco告警数据集，用于离线测试)
+#模拟Falco告警数据集，用于离线测试
 [
   {
     "output": "16:01:13.000000: Notice A shell was spawned in a container (container=abc123 image=alpine:latest user=root process=bash)",
