@@ -1,6 +1,6 @@
 # 🛡️ 基于 Falco 与 OPA 的云原生容器多步攻击检测与动态准入控制系统
 ## 架构
-> 能装好的都神了
+> 国内环境能装好的都神了
 ## 快速部署
 
 ```bash
@@ -8,7 +8,7 @@
 # Docker + Kind + kubectl + Helm 安装
 
 # 2. 创建集群
-kind create cluster --config deploy/kind/1 --name falco-opa-demo
+kind create cluster --config deploy/kind/kind.yaml --name falco-opa-demo
 
 # 3. 安装 OPA Gatekeeper
 helm repo add gatekeeper https://open-policy-agent.github.io/gatekeeper/charts
@@ -27,7 +27,7 @@ sleep 15
 mysql -h 127.0.0.1 -u root -proot123 falco_alerts < sql/init.sql
 
 # 6. 加载 OPA 策略
-kubectl apply -f deploy/helm/1
+kubectl apply -f deploy/helm/helm.yaml
 
 # 7. 启动联动服务
 source venv/bin/activate
