@@ -1,73 +1,58 @@
 apiVersion: templates.gatekeeper.sh/v1
 kind: ConstraintTemplate
-metadata: 
+metadata:
   name: k8simagepolicy
-spec: 
+spec:
   crd:
     spec:
-      name:
-        kind: K8sImagePolicy
-      validation: 
-        openAPIV3Schema: 
+      name: K8sImagePolicy
+      validation:
+        openAPIV3Schema:
           type: object
-          properties: 
-            blockedImages: 
+          properties:
+            blockedImages:
               type: array
               items:
                 type: string
             severity:
               type: string
-targets: 
-  - target: adminssion.k8s.gatekeeper.sh
-    rego: |
-      package k8simagepolicy
-      
-      violation[{"msg":msg}] {
-        container := input.review.obiect.spec.containers[_]
-        container.securityContext.privileged == ture
-        msg := "[DYNAMIC BLOCK]"
-      }
-      violation[{"msg":msg}] {
-        container := input.review.object.spec.containers[_]
-        image := container.image
-        blocked := input.parameters.blockedImage[_]
-        startwith(image, blocked)
-        msg := sprintf("[DYNAMIC BLOCK] Image '%s' 已被攻击链检测为恶意(severity:%s)",[image,input.parameters.servity])
-      }
-      violation[{"msg":msg}] {
-        volume := input.review.object.spec.volumes[_]
-        volume.hostPath
-        msg := "[DYNAMIC BLOCK] hostPath 挂载已被动态策略禁止"
-      }
+  targets:
+    - target: admission.gatekeeper.sh
+      rego: |
+        package k8simagepolicy
+
+        # 规则1: 禁止特权容器
+        violation[{"msg": msg}] {
+          container := input.review.object.spec.containers[_]
+          container.securityContext.privileged == true
+          msg := "[DYNAMIC BLOCK] 特权容器已被动态策略禁止"
+        }
+
+        # 规则2: 镜像黑名单匹配(支持前缀匹配)
+        violation[{"msg": msg}] {
+          container := input.review.object.spec.containers[_]
+          image := container.image
+          blocked := input.parameters.blockedImages[_]
+          startswith(image, blocked)
+          msg := sprintf("[DYNAMIC BLOCK] Image '%s' 已被攻击链检测为恶意 (severity: %s)", [image, input.parameters.severity])
+        }
+
+        # 规则3: 禁止 hostPath 挂载(防容器逃逸)
+        violation[{"msg": msg}] {
+          volume := input.review.object.spec.volumes[_]
+          volume.hostPath
+          msg := "[DYNAMIC BLOCK] hostPath 挂载已被动态策略禁止"
+        }
 ---
-apiVersion: constraint.gatekeeper.sh/v1beta1
-kind: k8sImagePolicy
-metadata: 
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: K8sImagePolicy
+metadata:
   name: baseline-image-policy
 spec:
-  match: 
+  match:
     kinds:
       - apiGroups: [""]
-        kind: ["Pod"]
+        kinds: ["Pod"]
   parameters:
     blockedImages: []
     severity: "baseline"
-
-
-
-
-
-
-
-
-
-
-
-
-  
-
-
-
-
-
-      
