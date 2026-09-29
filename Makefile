@@ -62,12 +62,14 @@ install-gatekeeper:
 		--wait
 # ---------- 4. 安装 Falco + FalcoSidekick(运行时检测) ----------
 install-falco:
-	@echo "=== 离线安装 Falco（本地chart包 /tmp/falco-9.2.0.tgz）==="
-	helm install falco /tmp/falco-9.2.0.tgz \
-	--namespace falco-system --create-namespace \
-	--set falco.engine.kind=ebpf --wait
-	@echo "Falco安装完成，falcosidekick待本地tgz包准备好再安装"
-
+	helm repo add falcosecurity https://falcosecurity.github.io/charts
+	helm repo update
+	helm install falco falcosecurity/falco \
+		--namespace falco-system --create-namespace \
+		--set falco.engine.kind=ebpf --wait
+	helm install falcosidekick falcosecurity/falcosidekick \
+		--namespace falco-system \
+		--set config.webhook.address=http://webhook-service.default.svc:8080/webhook --wait
 # ---------- 5. 本地 MySQL(告警与攻击链存储) ----------
 install-db:
 	docker run -d --name falco-db \
