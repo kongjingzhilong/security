@@ -13,20 +13,33 @@ SHELL := /bin/bash
 
 # ---------- 可调配置区(版本需与 charts/ 与 images/ 内文件名一致) ----------
 CLUSTER_NAME        := falco-opa-demo
-KIND_NODE_IMAGE     := kindest/node:v1.31.2
+# 与宿主机 Docker 内实际存在的节点镜像对齐(本机仅有 v1.37.0;已有 falco-opa-demo 集群即基于它)
+KIND_NODE_IMAGE     := kindest/node:v1.37.0
 
 # Helm Chart 本地包(相对路径,与 helm pull 默认输出名一致)
 GATEKEEPER_CHART    := charts/gatekeeper-3.23.1.tgz
-FALCO_CHART         := charts/falco-4.10.0.tgz
-FALCOSIDEKICK_CHART := charts/falcosidekick-0.7.16.tgz
+# falco 9.2.0 为官方「自包含」包: falcosidekick 0.14.* / k8s-metacollector 0.3.* /
+# falco-talon 0.4.* 三个依赖已打进 tgz 内部(helm dependency list 显示 unpacked),
+# 安装时零外网请求 → 无需单独的 falcosidekick chart 包
+FALCO_CHART         := charts/falco-9.2.0.tgz
+
+# 自定义多步攻击链规则(stage1~stage4): 注入到 /etc/falco/rules.d/custom-rules.yaml
+# 作用: 与 tests/pochack 的攻击阶段一一对应,并在 output 中携带 container_image,
+#       使 src/parser.py 能提取镜像 → 生成动态封禁策略
+# 注意 --set-file 的键名含点号,必须转义为 customRules.custom-rules\.yaml
+FALCO_CUSTOM_RULES  := deploy/falco/custom-rules.yaml
+FALCO_CUSTOM_RULES_ARG := --set-file 'customRules.custom-rules\.yaml=$(FALCO_CUSTOM_RULES)'
 
 # 镜像仓库与标签(必须与 images/*.tar 内导出的镜像一致)
 GATEKEEPER_REPO     := openpolicyagent/gatekeeper
 GATEKEEPER_TAG      := v3.23.1
 FALCO_REPO          := falcosecurity/falco
-FALCO_TAG           := 0.40.0
+# 与 charts/falco-9.2.0.tgz 的 appVersion 对齐(该 chart 的 falcoctl/driver 模板按 0.45 设计)
+FALCO_TAG           := 0.45.0
+# 注: falcosidekick 已作为 falco chart 的子 chart 内嵌(默认 falcosidekick.enabled=false),
+#     下两项为「启用内嵌 sidekick 时」覆盖值的参考默认(子 chart 默认镜像 tag)
 FALCOSIDEKICK_REPO  := falcosecurity/falcosidekick
-FALCOSIDEKICK_TAG   := 2.27.0
+FALCOSIDEKICK_TAG   := 2.32.0
 MYSQL_IMAGE         := mysql:8.0
 # MySQL root 口令:与 src/db.py 默认值 '0' 保持一致
 MYSQL_ROOT_PASSWORD := 0
@@ -49,7 +62,7 @@ help:
 	@echo "  make cluster             创建 Kind 多节点集群(节点镜像已离线就绪)"
 	@echo "  make load-images         离线导入 gatekeeper/falco 镜像到所有节点"
 	@echo "  make install-gatekeeper  本地 Chart 安装 Gatekeeper(OPA 准入)"
-	@echo "  make install-falco       本地 Chart 安装 Falco + Falcosidekick(module 驱动)"
+	@echo "  make install-falco       本地 Chart 安装 Falco(内嵌 sidekick,module 驱动)"
 	@echo "  make install-db          启动本地 MySQL 容器并加载表结构"
 	@echo "  make load-policies       加载 OPA ConstraintTemplate/Constraint"
 	@echo "  make start-service       启动 Python 联动服务"
@@ -103,9 +116,9 @@ load-images:
 	  bname=$$(basename "$$tar"); \
 	  for node in $$nodes; do \
 	    echo ">>  [$$node] 导入 $$bname"; \
-	    docker cp "$$tar" "$$node:/tmp/$$bname"; \
-	    docker exec "$$node" ctr -n k8s.io images import "/tmp/$$bname"; \
-	    docker exec "$$node" rm -f "/tmp/$$bname"; \
+	    docker cp "$$tar" "$$node:/root/$$bname"; \
+	    docker exec "$$node" ctr -n k8s.io images import "/root/$$bname"; \
+	    docker exec "$$node" rm -f "/root/$$bname"; \
 	  done; \
 	done; \
 	echo "✅ 所有节点镜像导入完成"
@@ -123,25 +136,24 @@ install-gatekeeper:
 	@echo "✅ Gatekeeper 安装完成"
 
 # ============================================================================
-# 5) 安装 Falco + Falcosidekick(本地 Chart,module 驱动适配 Kind)
-#    关键:关闭 falcoctl 的 install/follow,禁止运行期从外网拉取规则/插件
+# 5) 安装 Falco(本地 Chart, modern_ebpf 驱动适配 Kind)
+#    关键1: driver.kind=modern_ebpf —— 用 CO-RE/eBPF,无需内核头文件、无需联网下载/编译内核模块
+#           (原 driver.kind=module/kmod 需 DKMS 编译,本机无 kernel-devel,必然失败)
+#    关键2: 关闭 falcoctl 的 install/follow,禁止运行期从外网(ghcr.io)拉取规则/插件
+#           注意路径是 falcoctl.artifact.*,不是 falcoctl.config.artifact.*
 # ============================================================================
 install-falco:
 	helm install falco $(FALCO_CHART) \
 	  --namespace falco-system --create-namespace \
 	  --set image.repository=$(FALCO_REPO) \
 	  --set image.tag=$(FALCO_TAG) \
-	  --set driver.kind=module \
-	  --set falcoctl.config.artifact.install.enabled=false \
-	  --set falcoctl.config.artifact.follow.enabled=false \
+	  --set driver.kind=modern_ebpf \
+	  --set falcosidekick.enabled=false \
+	  --set falcoctl.artifact.install.enabled=false \
+	  --set falcoctl.artifact.follow.enabled=false \
+	  $(FALCO_CUSTOM_RULES_ARG) \
 	  --wait --timeout $(HELM_TIMEOUT)
-	helm install falcosidekick $(FALCOSIDEKICK_CHART) \
-	  --namespace falco-system \
-	  --set image.repository=$(FALCOSIDEKICK_REPO) \
-	  --set image.tag=$(FALCOSIDEKICK_TAG) \
-	  --set config.webhook.address=$(WEBHOOK_ADDRESS) \
-	  --wait --timeout $(HELM_TIMEOUT)
-	@echo "✅ Falco + Falcosidekick 安装完成"
+	@echo "✅ Falco 安装完成 (modern_ebpf 驱动 + 自定义攻击链规则)"
 
 # ============================================================================
 # 6) 本地 MySQL(告警与攻击链存储)

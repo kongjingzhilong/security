@@ -15,3 +15,17 @@ env/
 
 # 临时/缓存(离线资源脚本产物,按需提交 wheels/)
 *.log
+
+# 上游源码副本与构建缓存(非本项目产物,不入库)
+gatekeeper-3.23.1/
+v3.23.1.tar.gz
+dist/
+
+# 离线镜像 tar:体积大(全部合计约 1.1GB,超出 GitHub 免费 LFS 配额 1GB),
+# 且完全可由 scripts/download-offline-resources.sh 重新生成,故默认不入库。
+# 如确需入库(需已安装 git-lfs 且 LFS 配额充足),用强制添加:
+#   git add -f images/falco.tar images/gatekeeper.tar images/mysql.tar
+# 详见 docs/OFFLINE-RESOURCES.md 第六节。
+images/*.tar
+
+# charts/*.tgz 由 .gitattributes 走 Git LFS 管理(合计仅 220K),予以提交。

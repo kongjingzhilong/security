@@ -27,8 +27,8 @@ def handle_webhook():
     rule_name = alert.get('rule', 'Unknown')
     priority = alert.get('priority', 'INFO')
     output_text = alert.get('output', '')
-    # 解析告警字段
-    parsed = parse_falco_output(output_text)
+    # 解析告警字段(优先用引擎提供的结构化 output_fields)
+    parsed = parse_falco_output(output_text, alert.get('output_fields'))
     parsed['priority'] = priority
     container_id = parsed.get('container_id') or 'unknown'
     attack_stage = parsed.get('attack_stage', 0)
@@ -71,7 +71,11 @@ def handle_webhook():
                 severity=policy['severity'],
                 alert_id=alert_id
             )
-            print(f"  🛡️ 动态策略已部署: {policy['policy_name']}")
+            # 仅在 K8s Constraint 真正创建成功时才报告"已部署"(原代码无论成败都打印)
+            if policy.get('created'):
+                print(f"  🛡️ 动态策略已部署: {policy['policy_name']}")
+            else:
+                print(f"  ⚠️ 动态策略已入库但未能下发到集群: {policy['policy_name']}")
         # 重置攻击链状态
         reset_chain(container_id)
     return jsonify({'status': 'processed', 'chain_id': chain_id}), 200

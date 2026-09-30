@@ -1,0 +1,75 @@
+# ============================================================================
+#  falco-opa-demo 自定义多步攻击链规则（stage1 ~ stage4）
+#  ----------------------------------------------------------------------------
+#  作用：与 tests/pochack 的 4 个攻击阶段一一对应，并让每条告警的 output 中
+#        显式携带 container_image= 字段，供 src/parser.py 提取镜像 → 生成动态策略。
+#
+#  为什么需要这份规则：
+#    Falco 默认规则名（如 "Drop and execute new binary in container"）不含
+#    stage/shell/shadow/privilege 等关键词，导致 src/parser.py 的 attack_stage
+#    恒为 0、攻击链无法完成、动态策略无 blocked_images 可封。
+#
+#  设计要点：
+#    1. condition 中带 container / k8s.ns.name != "" —— 只在容器事件上触发，
+#       避免宿主机 kubelet 的 mount/umount 噪声（那些事件无镜像信息）
+#    2. output 中显式写 container_image=%container.image.repository
+#       —— 让解析器能拿到镜像名，动态策略才能生成 blockedImages
+# ============================================================================
+
+- rule: "[STAGE1] Shell Spawned In Container"
+  desc: 攻击阶段1 - 容器内启动交互式 shell
+  condition: >
+    spawned_process and container and k8s.ns.name != "" and
+    proc.name in (shell_binaries)
+  output: >
+    [STAGE1] Shell spawned in container
+    (user=%user.name process=%proc.name command=%proc.cmdline
+     container_id=%container.id container_image=%container.image.repository
+     k8s_pod=%k8s.pod.name)
+  priority: WARNING
+  tags: [demo, attack_chain, stage1]
+
+- rule: "[STAGE2] Sensitive File Read In Container"
+  desc: 攻击阶段2 - 容器内读取敏感文件
+  condition: >
+    open_read and container and k8s.ns.name != "" and
+    (fd.name startswith /etc/shadow or fd.name startswith /etc/sudoers or
+     fd.name startswith /root/.ssh or fd.name contains id_rsa)
+  output: >
+    [STAGE2] Sensitive file read in container
+    (user=%user.name process=%proc.name file=%fd.name
+     container_id=%container.id container_image=%container.image.repository
+     k8s_pod=%k8s.pod.name)
+  priority: WARNING
+  tags: [demo, attack_chain, stage2]
+
+- rule: "[STAGE3] Privilege Escalation Attempt In Container"
+  desc: 攻击阶段3 - 容器内提权尝试
+  condition: >
+    container and k8s.ns.name != "" and
+    (spawned_process and (proc.name in (su, sudo, setuid_binaries) or
+                          proc.name = setpriv) or
+     evt.type in (setuid, setgid))
+  output: >
+    [STAGE3] Privilege escalation attempt in container
+    (user=%user.name process=%proc.name command=%proc.cmdline
+     container_id=%container.id container_image=%container.image.repository
+     k8s_pod=%k8s.pod.name)
+  priority: ERROR
+  tags: [demo, attack_chain, stage3]
+
+- rule: "[STAGE4] Container Escape / Lateral Movement"
+  desc: 攻击阶段4 - 容器逃逸或横向移动尝试
+  condition: >
+    container and k8s.ns.name != "" and
+    (spawned_process and (proc.name in (mount_binaries, nsenter, unshare, chroot) or
+                          proc.name = docker or proc.name = crictl or
+                          proc.name = kubectl) or
+     open_write and fd.name startswith /host)
+  output: >
+    [STAGE4] Container escape or lateral movement attempt
+    (user=%user.name process=%proc.name command=%proc.cmdline
+     container_id=%container.id container_image=%container.image.repository
+     k8s_pod=%k8s.pod.name)
+  priority: CRITICAL
+  tags: [demo, attack_chain, stage4]

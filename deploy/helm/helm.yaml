@@ -5,7 +5,8 @@ metadata:
 spec:
   crd:
     spec:
-      name: K8sImagePolicy
+      names:
+        kind: K8sImagePolicy
       validation:
         openAPIV3Schema:
           type: object
@@ -14,10 +15,16 @@ spec:
               type: array
               items:
                 type: string
+            blockedUsers:
+              # k8s_client.py 生成的动态策略会传该字段(封禁用户),必须在 schema 中声明,
+              # 否则 Gatekeeper 严格校验会报 unknown field "spec.parameters.blockedUsers"
+              type: array
+              items:
+                type: integer
             severity:
               type: string
   targets:
-    - target: admission.gatekeeper.sh
+    - target: admission.k8s.gatekeeper.sh
       rego: |
         package k8simagepolicy
 
@@ -49,6 +56,10 @@ kind: K8sImagePolicy
 metadata:
   name: baseline-image-policy
 spec:
+  # 基线策略用 dryrun(仅审计/告警,不阻断):
+  #   保证 POC 的 4 个攻击阶段能被成功创建→被 Falco 检测到→生成动态策略
+  #   真正的阻断由下面动态生成的 deny 策略体现
+  enforcementAction: dryrun
   match:
     kinds:
       - apiGroups: [""]

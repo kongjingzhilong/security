@@ -1,42 +1,97 @@
 #!/usr/bin/env bash
-# 模拟多步攻击链，触发 Falco 检测 → OPA 动态拦截
+# ============================================================================
+#  多步攻击链 POC —— 触发 Falco 检测 → Python 联动 → OPA 动态准入拦截
+#  ----------------------------------------------------------------------------
+#  离线环境注意(重要):
+#    本脚本原先用 `kubectl run --image=alpine:latest`。kubectl 对 ":latest"
+#    标签默认设置 imagePullPolicy=Always,会强制 kubelet 联网校验镜像 digest,
+#    在无外网环境下必然 ImagePullBackOff。
+#    因此改为显式 YAML + imagePullPolicy: Never(只用节点已导入的本地镜像)。
+#    若后续更换镜像名,请同步执行 make load-images 或按需导入。
+# ============================================================================
 set -e
-echo "=== 🔴 多步攻击链 POC 演示 ==="
-# 阶段1：模拟异常 shell 启动
+IMG="${POC_IMAGE:-alpine:latest}"
+echo "=== 🔴 多步攻击链 POC 演示 (image=$IMG) ==="
+
+cleanup() {
+  # 必须等待删除完成,否则同名 Pod 仍处于 Terminating,apply 会报
+  # "pod updates may not add or remove containers"
+  kubectl delete pod stage1-shell stage2-read stage3-privileged stage4-hostpath \
+    --ignore-not-found --wait=true --timeout=60s >/dev/null 2>&1 || true
+}
+cleanup
+
+# ---------------------------------------------------------------- 阶段1
 echo "[Stage 1] 模拟异常 shell 启动..."
-kubectl run stage1-shell --image=alpine:latest --restart=Never -- sh -c "while true; do echo 'shell spawned'; sleep 1; done"
-sleep 3
-# 阶段2：模拟敏感文件读取
+cat << EOF | kubectl apply -f -
+apiVersion: v1
+kind: Pod
+metadata:
+  name: stage1-shell
+  labels: {poc: attack-chain, stage: "1"}
+spec:
+  restartPolicy: Never
+  containers:
+    - name: shell
+      image: ${IMG}
+      imagePullPolicy: Never
+      command: ["sh", "-c", "while true; do echo 'shell spawned'; sleep 1; done"]
+EOF
+sleep 5
+
+# ---------------------------------------------------------------- 阶段2
 echo "[Stage 2] 模拟敏感文件读取..."
-kubectl run stage2-read --image=alpine:latest --restart=Never -- sh -c "cat /etc/shadow 2>/dev/null; cat /root/.ssh/id_rsa 2>/dev/null; sleep 2"
-sleep 3
-# 阶段3：模拟提权尝试
+cat << EOF | kubectl apply -f -
+apiVersion: v1
+kind: Pod
+metadata:
+  name: stage2-read
+  labels: {poc: attack-chain, stage: "2"}
+spec:
+  restartPolicy: Never
+  containers:
+    - name: reader
+      image: ${IMG}
+      imagePullPolicy: Never
+      command: ["sh", "-c", "cat /etc/shadow 2>/dev/null; cat /root/.ssh/id_rsa 2>/dev/null; sleep 3"]
+EOF
+sleep 5
+
+# ---------------------------------------------------------------- 阶段3
 echo "[Stage 3] 模拟特权容器创建（提权）..."
-cat << 'EOF' | kubectl apply -f -
+cat << EOF | kubectl apply -f -
 apiVersion: v1
 kind: Pod
 metadata:
   name: stage3-privileged
+  labels: {poc: attack-chain, stage: "3"}
 spec:
+  restartPolicy: Never
   containers:
     - name: priv
-      image: alpine:latest
+      image: ${IMG}
+      imagePullPolicy: Never
       securityContext:
         privileged: true
       command: ["sh", "-c", "echo 'privileged container'; sleep 10"]
 EOF
-sleep 3
-# 阶段4：模拟 hostPath 挂载（容器逃逸）
+sleep 5
+
+# ---------------------------------------------------------------- 阶段4
 echo "[Stage 4] 模拟 hostPath 挂载（容器逃逸尝试）..."
-cat << 'EOF' | kubectl apply -f -
+cat << EOF | kubectl apply -f -
 apiVersion: v1
 kind: Pod
 metadata:
   name: stage4-hostpath
+  labels: {poc: attack-chain, stage: "4"}
 spec:
+  restartPolicy: Never
   containers:
     - name: host
-      image: alpine:latest
+      image: ${IMG}
+      imagePullPolicy: Never
+      command: ["sh", "-c", "ls /host >/dev/null 2>&1; touch /host/tmp/poc_escape_probe 2>/dev/null; sleep 5"]
       volumeMounts:
         - mountPath: /host
           name: host-root
@@ -45,9 +100,18 @@ spec:
       hostPath:
         path: /
 EOF
-sleep 5
+sleep 8
+
 echo ""
 echo "=== ✅ POC 执行完成 ==="
-echo "查看 Falco 告警: kubectl logs -n falco-system -l app.kubernetes.io/name=falco | grep -i attack"
-echo "查看 OPA 拦截: kubectl get k8simagepolicy -o wide"
-echo "查看数据库记录: mysql -h 127.0.0.1 -u root -p0 falco_alerts -e 'SELECT id,rule_name,priority,attack_stage FROM alerts;'"
+echo "--- 各阶段 Pod 状态 ---"
+kubectl get pods -l poc=attack-chain -o wide 2>/dev/null || true
+echo ""
+echo "查看 Falco 告警:"
+echo "  kubectl logs -n falco-system -l app.kubernetes.io/name=falco -c falco --tail=30 | grep -E 'STAGE[1-4]'"
+echo "查看 OPA 动态拦截:"
+echo "  kubectl get k8simagepolicy"
+echo "查看数据库记录:"
+echo "  docker exec falco-db mysql -u root -p0 -e \"USE falco_alerts; SELECT id,rule_name,attack_stage,container_image FROM alerts ORDER BY id DESC LIMIT 10;\""
+echo "查看生成的动态策略:"
+echo "  docker exec falco-db mysql -u root -p0 -e \"USE falco_alerts; SELECT policy_name,blocked_images,severity FROM dynamic_policies;\""
